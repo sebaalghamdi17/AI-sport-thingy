@@ -1,2 +1,64 @@
 # AI-sport-thingy
 Ai sport thingy (SCAI)
+import cv2
+import numpy as np
+import tensorflow as tf
+import matplotlib.pyplot as plt
+
+# Load the TensorFlow Lite model
+interpreter = tf.lite.Interpreter(model_path="model.tflite")
+interpreter.allocate_tensors()
+
+# Get input and output tensor details
+input_details = interpreter.get_input_details()
+output_details = interpreter.get_output_details()
+
+# Open the pre-recorded sports video
+cap = cv2.VideoCapture("sports_video.mp4")
+positions = []
+
+while cap.isOpened():
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    # Resize frame to model's input size
+    input_shape = input_details[0]['shape']
+    resized = cv2.resize(frame, (input_shape[2], input_shape[1]))
+    input_data = np.expand_dims(resized, axis=0).astype(np.uint8)
+
+    # Perform inference
+    interpreter.set_tensor(input_details[0]['index'], input_data)
+    interpreter.invoke()
+
+    # Get output results
+    boxes = interpreter.get_tensor(output_details[0]['index'])[0]
+    classes = interpreter.get_tensor(output_details[1]['index'])[0]
+    scores = interpreter.get_tensor(output_details[2]['index'])[0]
+
+    height, width, _ = frame.shape
+
+    # Track player positions
+    for i in range(len(scores)):
+        if scores[i] > 0.5:  # Confidence threshold
+            ymin, xmin, ymax, xmax = boxes[i]
+            x = int((xmin + xmax) / 2 * width)
+            y = int((ymin + ymax) / 2 * height)
+            positions.append((x, y))
+
+cap.release()
+
+# Create heatmap from player positions
+heatmap = np.zeros((720, 1280))
+for x, y in positions:
+    if 0 <= y < 720 and 0 <= x < 1280:
+        heatmap[y, x] += 1
+
+# Apply Gaussian blur for better visualization
+heatmap = cv2.GaussianBlur(heatmap, (55, 55), 0)
+
+# Display heatmap
+plt.imshow(heatmap, cmap='hot')
+plt.colorbar()
+plt.title("Player Movement Heatmap")
+plt.show()
