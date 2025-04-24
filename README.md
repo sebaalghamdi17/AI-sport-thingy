@@ -1,64 +1,77 @@
-# AI-sport-thingy
-Ai sport thingy (SCAI)
 import cv2
 import numpy as np
-import tensorflow as tf
+import tflite_runtime.interpreter as tflite
 import matplotlib.pyplot as plt
+import time
+import os
 
-# Load the TensorFlow Lite model
-interpreter = tf.lite.Interpreter(model_path="model.tflite")
+# --- Initialization ---
+video_path = "game_footage.mp4"
+output_dir = "media_outputs"
+os.makedirs(output_dir, exist_ok=True)
+
+# Load TensorFlow Lite model
+interpreter = tflite.Interpreter(model_path="ssd_mobilenet_v2.tflite")
 interpreter.allocate_tensors()
 
-# Get input and output tensor details
+# Get input and output details
 input_details = interpreter.get_input_details()
 output_details = interpreter.get_output_details()
 
-# Open the pre-recorded sports video
-cap = cv2.VideoCapture("sports_video.mp4")
-positions = []
+# Start video processing
+cap = cv2.VideoCapture(video_path)
+frame_count = 0
+player_tracks = []
 
+# --- Process Video Frame by Frame ---
 while cap.isOpened():
     ret, frame = cap.read()
     if not ret:
         break
 
-    # Resize frame to model's input size
-    input_shape = input_details[0]['shape']
-    resized = cv2.resize(frame, (input_shape[2], input_shape[1]))
-    input_data = np.expand_dims(resized, axis=0).astype(np.uint8)
+    # Preprocess frame
+    input_size = input_details[0]['shape'][1:3]
+    resized = cv2.resize(frame, tuple(input_size))
+    input_data = np.expand_dims(resized.astype(np.uint8), axis=0)
 
-    # Perform inference
+    # Run inference
     interpreter.set_tensor(input_details[0]['index'], input_data)
     interpreter.invoke()
-
-    # Get output results
+    
     boxes = interpreter.get_tensor(output_details[0]['index'])[0]
     classes = interpreter.get_tensor(output_details[1]['index'])[0]
     scores = interpreter.get_tensor(output_details[2]['index'])[0]
 
-    height, width, _ = frame.shape
-
-    # Track player positions
+    # Track players
+    frame_players = []
     for i in range(len(scores)):
-        if scores[i] > 0.5:  # Confidence threshold
+        if scores[i] > 0.5:
             ymin, xmin, ymax, xmax = boxes[i]
-            x = int((xmin + xmax) / 2 * width)
-            y = int((ymin + ymax) / 2 * height)
-            positions.append((x, y))
+            x_center = int((xmin + xmax) / 2 * frame.shape[1])
+            y_center = int((ymin + ymax) / 2 * frame.shape[0])
+            frame_players.append((x_center, y_center))
+            cv2.circle(frame, (x_center, y_center), 5, (0, 255, 0), -1)
+
+    player_tracks.extend(frame_players)
+
+    # Optional: Save annotated frame
+    if frame_count % 30 == 0:
+        cv2.imwrite(f"{output_dir}/frame_{frame_count}.jpg", frame)
+
+    frame_count += 1
 
 cap.release()
 
-# Create heatmap from player positions
-heatmap = np.zeros((720, 1280))
-for x, y in positions:
-    if 0 <= y < 720 and 0 <= x < 1280:
-        heatmap[y, x] += 1
+# --- Generate Heatmap for Media Use ---
+heatmap_img = np.zeros((720, 1280), dtype=np.float32)
 
-# Apply Gaussian blur for better visualization
-heatmap = cv2.GaussianBlur(heatmap, (55, 55), 0)
+for (x, y) in player_tracks:
+    if 0 <= x < 1280 and 0 <= y < 720:
+        heatmap_img[y, x] += 1
 
-# Display heatmap
-plt.imshow(heatmap, cmap='hot')
-plt.colorbar()
-plt.title("Player Movement Heatmap")
-plt.show()
+plt.imshow(heatmap_img, cmap='hot', interpolation='nearest')
+plt.title("Player Activity Heatmap")
+plt.axis('off')
+plt.savefig(f"{output_dir}/heatmap_media.png", bbox_inches='tight')
+
+print("Media outputs generated!")
